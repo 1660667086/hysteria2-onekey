@@ -64,6 +64,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/<your-github-user>/hysteria2
 - 端口：脚本使用的 `PORT`，默认 `443`
 - 来源：`0.0.0.0/0`
 
+阿里云 ECS 的常见路径：
+
+1. 进入 ECS 实例详情
+2. 打开安全组
+3. 入方向添加规则
+4. 协议类型选 `UDP`
+5. 端口范围填 `443/443`，授权对象填 `0.0.0.0/0`
+
 ## 管理命令
 
 ```bash
@@ -80,4 +88,3 @@ systemctl restart hysteria-server.service
 ```bash
 bash <(curl -fsSL https://get.hy2.sh/) --remove
 ```
-

@@ -238,9 +238,40 @@ build_uri() {
   printf '%s\n' "$uri"
 }
 
+detect_cloud_provider() {
+  local provider=""
+
+  if curl -fsS --max-time 1 http://100.100.100.200/latest/meta-data/instance-id >/dev/null 2>&1; then
+    provider="Alibaba Cloud"
+  elif curl -fsS --max-time 1 http://169.254.169.254/opc/v1/instance/ >/dev/null 2>&1; then
+    provider="Oracle Cloud"
+  elif curl -fsS --max-time 1 -H "Metadata-Flavor: Google" \
+    http://169.254.169.254/computeMetadata/v1/instance/id >/dev/null 2>&1; then
+    provider="Google Cloud"
+  elif curl -fsS --max-time 1 http://169.254.169.254/latest/meta-data/instance-id >/dev/null 2>&1; then
+    provider="AWS-compatible cloud"
+  fi
+
+  printf '%s\n' "$provider"
+}
+
+print_cloud_firewall_notice() {
+  local provider="$1"
+
+  printf '\n'
+  yellow "Firewall note:"
+  printf '  The server OS firewall has been opened for UDP %s.\n' "$PORT"
+  if [[ -n "$provider" ]]; then
+    printf '  Detected %s. You may still need to open UDP %s in the cloud security group/firewall.\n' "$provider" "$PORT"
+  else
+    printf '  If clients time out, also open UDP %s in your cloud provider security group/firewall.\n' "$PORT"
+  fi
+}
+
 print_summary() {
   local host="$1"
   local uri="$2"
+  local provider="$3"
 
   green "Hysteria 2 is installed and running."
   printf '\n'
@@ -254,6 +285,7 @@ print_summary() {
   printf 'Useful commands:\n'
   printf '  systemctl status hysteria-server.service\n'
   printf '  journalctl --no-pager -u hysteria-server.service -n 80\n'
+  print_cloud_firewall_notice "$provider"
 }
 
 main() {
@@ -267,10 +299,11 @@ main() {
   open_firewall
   start_service
 
-  local host uri
+  local host uri provider
   host="$(detect_public_ip)"
   uri="$(build_uri "$host")"
-  print_summary "$host" "$uri"
+  provider="$(detect_cloud_provider)"
+  print_summary "$host" "$uri" "$provider"
 }
 
 main "$@"
