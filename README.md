@@ -143,6 +143,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/1660667086/hysteria2-onekey/
 启用 `ENABLE_PANEL=1` 后，脚本会额外安装并启动：
 
 - `hysteria-panel.service`
+- `hysteria-expire-users.timer`
 - `/opt/hysteria2-onekey/panel.py`
 - `/etc/hysteria/users.json`
 - `/etc/hysteria/server.json`
@@ -153,9 +154,18 @@ bash <(curl -fsSL https://raw.githubusercontent.com/1660667086/hysteria2-onekey/
 - 删除用户
 - 启用/停用用户
 - 重置用户密码
+- 设置用户到期时间
+- 到期后自动停用用户并重启 Hysteria
 - 自动生成每个用户的 Hysteria2 导入链接
 - 自动重写 `/etc/hysteria/config.yaml`
 - 自动重启 `hysteria-server.service`
+
+用户到期时间有两种填法：
+
+- 新增或编辑用户时填写 `valid days`，例如 `30` 表示从现在开始 30 天后到期
+- 直接选择 `expires_at` 时间，按服务器本地时区解析；留空表示永不过期
+
+脚本会安装 `hysteria-expire-users.timer`，默认每分钟检查一次。到期用户会被自动禁用，配置会重写并重启 `hysteria-server.service`。如果所有用户都到期，脚本会写入一个随机锁定账号，避免任何真实用户继续连接。
 
 ## 云安全组
 
@@ -183,6 +193,8 @@ journalctl --no-pager -u hysteria-server.service -n 80
 nano /etc/hysteria/config.yaml
 systemctl restart hysteria-server.service
 systemctl status hysteria-panel.service
+systemctl status hysteria-expire-users.timer
+systemctl list-timers hysteria-expire-users.timer
 ```
 
 ## 卸载 Hysteria

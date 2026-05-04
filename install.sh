@@ -400,6 +400,32 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 EOF
+
+  cat >/etc/systemd/system/hysteria-expire-users.service <<EOF
+[Unit]
+Description=Expire Hysteria 2 panel users
+After=network-online.target hysteria-server.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=$PANEL_ENV
+ExecStart=/usr/bin/env python3 $PANEL_APP --expire-users
+EOF
+
+  cat >/etc/systemd/system/hysteria-expire-users.timer <<EOF
+[Unit]
+Description=Check Hysteria 2 user expiry times
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
 }
 
 run_panel_cli() {
@@ -579,10 +605,15 @@ start_panel_service() {
   systemctl daemon-reload
   systemctl enable --now hysteria-panel.service
   systemctl restart hysteria-panel.service
+  systemctl enable --now hysteria-expire-users.timer
   sleep 1
   systemctl is-active --quiet hysteria-panel.service || {
     systemctl --no-pager --full status hysteria-panel.service || true
     die "hysteria-panel.service is not active"
+  }
+  systemctl is-active --quiet hysteria-expire-users.timer || {
+    systemctl --no-pager --full status hysteria-expire-users.timer || true
+    die "hysteria-expire-users.timer is not active"
   }
 }
 
@@ -672,6 +703,7 @@ print_summary() {
   printf '  journalctl --no-pager -u hysteria-server.service -n 80\n'
   if [[ "$ENABLE_PANEL" == "1" ]]; then
     printf '  systemctl status hysteria-panel.service\n'
+    printf '  systemctl status hysteria-expire-users.timer\n'
   fi
   print_cloud_firewall_notice "$provider"
 }

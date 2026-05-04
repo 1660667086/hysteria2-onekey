@@ -9,7 +9,7 @@ import secrets
 import shlex
 import subprocess
 import sys
-import time
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
@@ -61,6 +61,9 @@ def load_users():
                 "password": password,
                 "enabled": bool(user.get("enabled", True)),
                 "created_at": user.get("created_at", ""),
+                "expires_at": str(user.get("expires_at", "") or ""),
+                "disabled_reason": str(user.get("disabled_reason", "") or ""),
+                "expired_at": str(user.get("expired_at", "") or ""),
             }
         )
     return clean
@@ -95,9 +98,14 @@ def yaml_string(value):
 
 def render_config():
     meta = load_meta()
-    users = [user for user in load_users() if user.get("enabled")]
+    users = active_users(load_users())
     if not users:
-        raise RuntimeError("at least one enabled Hysteria user is required")
+        users = [
+            {
+                "name": "__expired_lock__",
+                "password": secrets.token_hex(32),
+            }
+        ]
 
     lines = [
         f"listen: :{meta['port']}",
@@ -147,6 +155,7 @@ def render_config():
 
 
 def restart_hysteria():
+    expire_users(restart=False)
     render_config()
     subprocess.run(shlex.split(RESTART_CMD), check=True)
 
@@ -190,8 +199,88 @@ def valid_username(name):
     return all(ch in allowed for ch in name)
 
 
+def utc_now():
+    return datetime.now(timezone.utc)
+
+
 def now_iso():
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def iso_utc(dt):
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_datetime(value):
+    value = str(value or "").strip()
+    if not value:
+        return None
+    normalized = value
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.astimezone()
+    return dt.astimezone(timezone.utc)
+
+
+def parse_expiry_form(form):
+    valid_days = str(form.get("valid_days", "") or "").strip()
+    expires_at = str(form.get("expires_at", "") or "").strip()
+    if valid_days:
+        try:
+            days = int(valid_days)
+        except ValueError as exc:
+            raise ValueError("valid days must be a number") from exc
+        if days < 1:
+            raise ValueError("valid days must be at least 1")
+        return iso_utc(utc_now() + timedelta(days=days))
+    if not expires_at:
+        return ""
+    dt = parse_datetime(expires_at)
+    if dt is None:
+        raise ValueError("expiry time must be a valid date and time")
+    return iso_utc(dt)
+
+
+def is_expired(user, now=None):
+    expires = parse_datetime(user.get("expires_at", ""))
+    if expires is None:
+        return False
+    return expires <= (now or utc_now())
+
+
+def active_users(users):
+    now = utc_now()
+    return [user for user in users if user.get("enabled") and not is_expired(user, now)]
+
+
+def expiry_display(user):
+    expires_at = user.get("expires_at", "")
+    if not expires_at:
+        return "Never"
+    dt = parse_datetime(expires_at)
+    if dt is None:
+        return expires_at
+    return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+
+
+def expiry_input_value(user):
+    dt = parse_datetime(user.get("expires_at", ""))
+    if dt is None:
+        return ""
+    return dt.astimezone().strftime("%Y-%m-%dT%H:%M")
+
+
+def user_status(user):
+    if is_expired(user):
+        return "expired"
+    if user.get("enabled"):
+        return "enabled"
+    return "disabled"
 
 
 def find_user(users, name):
@@ -202,7 +291,26 @@ def find_user(users, name):
 
 
 def enabled_count(users):
-    return sum(1 for user in users if user.get("enabled"))
+    return len(active_users(users))
+
+
+def expire_users(restart=False):
+    users = load_users()
+    now = utc_now()
+    changed = False
+    expired_names = []
+    for user in users:
+        if user.get("enabled") and is_expired(user, now):
+            user["enabled"] = False
+            user["disabled_reason"] = "expired"
+            user["expired_at"] = now_iso()
+            changed = True
+            expired_names.append(user["name"])
+    if changed:
+        save_users(users)
+        if restart:
+            restart_hysteria()
+    return expired_names
 
 
 class PanelHandler(BaseHTTPRequestHandler):
@@ -288,6 +396,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                 self.toggle_user(form)
             elif action == "/users/password":
                 self.change_password(form)
+            elif action == "/users/expiry":
+                self.change_expiry(form)
             elif action == "/service/restart":
                 restart_hysteria()
                 self.redirect("service restarted")
@@ -306,7 +416,16 @@ class PanelHandler(BaseHTTPRequestHandler):
         users = load_users()
         if find_user(users, name):
             raise ValueError("user already exists")
-        users.append({"name": name, "password": password, "enabled": True, "created_at": now_iso()})
+        expires_at = parse_expiry_form(form)
+        users.append(
+            {
+                "name": name,
+                "password": password,
+                "enabled": True,
+                "created_at": now_iso(),
+                "expires_at": expires_at,
+            }
+        )
         save_users(users)
         restart_hysteria()
         self.redirect(f"user {name} added")
@@ -317,7 +436,7 @@ class PanelHandler(BaseHTTPRequestHandler):
         user = find_user(users, name)
         if not user:
             raise ValueError("user not found")
-        if user.get("enabled") and enabled_count(users) <= 1:
+        if user.get("enabled") and not is_expired(user) and enabled_count(users) <= 1:
             raise ValueError("cannot delete the last enabled user")
         users = [item for item in users if item["name"] != name]
         save_users(users)
@@ -330,9 +449,13 @@ class PanelHandler(BaseHTTPRequestHandler):
         user = find_user(users, name)
         if not user:
             raise ValueError("user not found")
-        if user.get("enabled") and enabled_count(users) <= 1:
+        if user.get("enabled") and not is_expired(user) and enabled_count(users) <= 1:
             raise ValueError("cannot disable the last enabled user")
+        if not user.get("enabled") and is_expired(user):
+            raise ValueError("user is expired; clear or extend expiry before enabling")
         user["enabled"] = not user.get("enabled")
+        if user["enabled"]:
+            user["disabled_reason"] = ""
         save_users(users)
         restart_hysteria()
         self.redirect(f"user {name} updated")
@@ -351,13 +474,36 @@ class PanelHandler(BaseHTTPRequestHandler):
         restart_hysteria()
         self.redirect(f"password changed for {name}")
 
+    def change_expiry(self, form):
+        name = form.get("name", "").strip()
+        users = load_users()
+        user = find_user(users, name)
+        if not user:
+            raise ValueError("user not found")
+        if form.get("clear") == "1":
+            user["expires_at"] = ""
+        else:
+            user["expires_at"] = parse_expiry_form(form)
+        if user.get("expires_at") and is_expired(user):
+            user["enabled"] = False
+            user["disabled_reason"] = "expired"
+            user["expired_at"] = now_iso()
+        elif user.get("disabled_reason") == "expired":
+            user["disabled_reason"] = ""
+            user["expired_at"] = ""
+        save_users(users)
+        restart_hysteria()
+        self.redirect(f"expiry updated for {name}")
+
     def render_page(self, parsed):
         msg = parse_qs(parsed.query).get("msg", [""])[0]
         users = load_users()
         rows = []
         for user in users:
             name = html.escape(user["name"])
-            status = "enabled" if user.get("enabled") else "disabled"
+            status = user_status(user)
+            expires = html.escape(expiry_display(user))
+            expiry_value = html.escape(expiry_input_value(user))
             uri = html.escape(build_uri(user))
             toggle = "Disable" if user.get("enabled") else "Enable"
             rows.append(
@@ -365,10 +511,13 @@ class PanelHandler(BaseHTTPRequestHandler):
                 <tr>
                   <td><strong>{name}</strong><br><span class="muted">{html.escape(user.get('created_at', ''))}</span></td>
                   <td><span class="badge {status}">{status}</span></td>
+                  <td><strong>{expires}</strong></td>
                   <td><input readonly value="{uri}" onclick="this.select()"></td>
                   <td class="actions">
                     <form method="post" action="/users/toggle"><input type="hidden" name="csrf" value="{CSRF_TOKEN}"><input type="hidden" name="name" value="{name}"><button>{toggle}</button></form>
                     <form method="post" action="/users/password"><input type="hidden" name="csrf" value="{CSRF_TOKEN}"><input type="hidden" name="name" value="{name}"><input name="password" placeholder="new or blank random"><button>Set Pass</button></form>
+                    <form method="post" action="/users/expiry"><input type="hidden" name="csrf" value="{CSRF_TOKEN}"><input type="hidden" name="name" value="{name}"><input name="valid_days" placeholder="days"><input type="datetime-local" name="expires_at" value="{expiry_value}"><button>Set Expiry</button></form>
+                    <form method="post" action="/users/expiry"><input type="hidden" name="csrf" value="{CSRF_TOKEN}"><input type="hidden" name="name" value="{name}"><input type="hidden" name="clear" value="1"><button>Clear Expiry</button></form>
                     <form method="post" action="/users/delete"><input type="hidden" name="csrf" value="{CSRF_TOKEN}"><input type="hidden" name="name" value="{name}"><button class="danger">Delete</button></form>
                   </td>
                 </tr>
@@ -394,14 +543,17 @@ class PanelHandler(BaseHTTPRequestHandler):
     input {{ box-sizing: border-box; width: 100%; border: 1px solid #cfd7e6; border-radius: 6px; padding: 10px 12px; font-size: 14px; }}
     button {{ border: 0; border-radius: 6px; background: #2563eb; color: white; padding: 9px 13px; cursor: pointer; }}
     button.danger {{ background: #dc2626; }}
-    .actions {{ min-width: 360px; }}
+    .actions {{ min-width: 520px; }}
     .actions form {{ display: flex; gap: 8px; margin: 0 0 8px; }}
     .actions input[name=password] {{ width: 180px; }}
+    .actions input[name=valid_days] {{ width: 78px; }}
+    .actions input[type=datetime-local] {{ width: 190px; }}
     .grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }}
     .muted {{ color: #697386; font-size: 13px; }}
     .badge {{ display: inline-block; padding: 4px 8px; border-radius: 999px; font-size: 13px; }}
     .badge.enabled {{ color: #166534; background: #dcfce7; }}
     .badge.disabled {{ color: #7f1d1d; background: #fee2e2; }}
+    .badge.expired {{ color: #78350f; background: #fef3c7; }}
     .flash {{ background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; padding: 12px; border-radius: 6px; margin-bottom: 14px; }}
     @media (max-width: 880px) {{
       .grid {{ grid-template-columns: 1fr; }}
@@ -423,13 +575,15 @@ class PanelHandler(BaseHTTPRequestHandler):
         <input type="hidden" name="csrf" value="{CSRF_TOKEN}">
         <input name="name" placeholder="username" required>
         <input name="password" placeholder="password, blank = random">
+        <input name="valid_days" placeholder="valid days">
+        <input type="datetime-local" name="expires_at">
         <button>Add and Restart</button>
       </form>
     </section>
     <section>
       <h2>Users</h2>
       <table>
-        <thead><tr><th>User</th><th>Status</th><th>Import Link</th><th>Actions</th></tr></thead>
+        <thead><tr><th>User</th><th>Status</th><th>Expires</th><th>Import Link</th><th>Actions</th></tr></thead>
         <tbody>{''.join(rows)}</tbody>
       </table>
     </section>
@@ -457,6 +611,13 @@ def main():
             if not user:
                 raise SystemExit("user not found")
             print(build_uri(user))
+            return
+        if sys.argv[1] == "--expire-users":
+            expired = expire_users(restart=True)
+            if expired:
+                print("expired users: " + ", ".join(expired))
+            else:
+                print("no expired users")
             return
 
     if not PANEL_ADMIN_PASS:
