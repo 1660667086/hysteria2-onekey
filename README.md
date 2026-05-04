@@ -27,10 +27,21 @@ ENABLE_PANEL=1 \
 bash <(curl -fsSL https://raw.githubusercontent.com/1660667086/hysteria2-onekey/main/install.sh)
 ```
 
-默认 Web 面板只监听 `127.0.0.1:8080`，更安全。远程访问时先在本机开 SSH 隧道：
+默认 Web 面板监听公网 `0.0.0.0:8080`，脚本会自动放行服务器系统防火墙里的 `TCP 8080`。安装完成后浏览器打开：
+
+```text
+http://服务器IP:8080
+```
+
+管理账号默认是 `admin`，管理密码默认自动随机生成并在安装结果里输出。
+
+如果要自己指定管理账号和密码：
 
 ```bash
-ssh -L 8080:127.0.0.1:8080 root@你的服务器IP
+ENABLE_PANEL=1 \
+PANEL_ADMIN_USER=myadmin \
+PANEL_ADMIN_PASS='换成你的强密码' \
+bash <(curl -fsSL https://raw.githubusercontent.com/1660667086/hysteria2-onekey/main/install.sh)
 ```
 
 如果服务器不能访问 `raw.githubusercontent.com`，可以先拉仓库再运行：
@@ -73,24 +84,29 @@ Web 面板变量：
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `ENABLE_PANEL` | `0` | 设为 `1` 启用多用户 Web 面板 |
-| `PANEL_BIND` | `127.0.0.1` | 面板监听地址，公网访问可设为 `0.0.0.0` |
+| `PANEL_BIND` | `0.0.0.0` | 面板监听地址，默认公网；只想本机访问可设为 `127.0.0.1` |
 | `PANEL_PORT` | `8080` | 面板 TCP 端口 |
 | `PANEL_ADMIN_USER` | `admin` | 面板登录用户名 |
 | `PANEL_ADMIN_PASS` | 自动随机 | 面板登录密码 |
-| `PANEL_OPEN_FIREWALL` | `0` | 设为 `1` 时放行面板 TCP 端口 |
+| `PANEL_OPEN_FIREWALL` | `1` | 默认放行面板 TCP 端口；设为 `0` 可跳过 |
 | `INITIAL_USER` | `user1` | 初始 Hysteria 用户名 |
 | `INITIAL_USER_PASS` | 自动随机 | 初始 Hysteria 用户密码 |
 
-如果你确实要把面板暴露到公网：
+两种管理账号密码方式：
+
+- 默认：不填 `PANEL_ADMIN_USER` / `PANEL_ADMIN_PASS`，账号为 `admin`，密码自动随机生成
+- 自定义：安装时填写 `PANEL_ADMIN_USER` / `PANEL_ADMIN_PASS`
+
+如果你想把面板改回只允许 SSH 隧道访问：
 
 ```bash
 ENABLE_PANEL=1 \
-PANEL_BIND=0.0.0.0 \
-PANEL_OPEN_FIREWALL=1 \
+PANEL_BIND=127.0.0.1 \
+PANEL_OPEN_FIREWALL=0 \
 bash <(curl -fsSL https://raw.githubusercontent.com/1660667086/hysteria2-onekey/main/install.sh)
 ```
 
-公网面板一定要使用强密码，并在云安全组中只允许自己的 IP 访问 `PANEL_PORT`。
+公网面板一定要使用强密码，并在云安全组中放行 `TCP 8080`。更安全的做法是在云安全组中只允许自己的 IP 访问 `PANEL_PORT`。
 
 ## Web 面板功能
 
