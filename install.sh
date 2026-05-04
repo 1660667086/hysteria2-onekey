@@ -31,12 +31,170 @@ USERS_FILE="${USERS_FILE:-$CONFIG_DIR/users.json}"
 SERVER_META_FILE="${SERVER_META_FILE:-$CONFIG_DIR/server.json}"
 INITIAL_USER="${INITIAL_USER:-user1}"
 INITIAL_USER_PASS="${INITIAL_USER_PASS:-}"
+INTERACTIVE="${INTERACTIVE:-auto}"
 
 red() { printf '\033[31m%s\033[0m\n' "$*" >&2; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
 yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
 log() { printf '[%s] %s\n' "$SCRIPT_NAME" "$*"; }
 die() { red "ERROR: $*"; exit 1; }
+
+prompt_enabled() {
+  local value
+  value="$(printf '%s' "$INTERACTIVE" | tr '[:upper:]' '[:lower:]')"
+
+  case "$value" in
+    1|true|yes|y|on)
+      return 0
+      ;;
+    0|false|no|n|off)
+      return 1
+      ;;
+    auto|"")
+      [[ -r /dev/tty && -w /dev/tty ]]
+      ;;
+    *)
+      die "INTERACTIVE must be auto, 1 or 0"
+      ;;
+  esac
+}
+
+prompt_value() {
+  local var_name="$1"
+  local label="$2"
+  local current="$3"
+  local default_label="${4:-$current}"
+  local answer=""
+
+  printf '%s [%s]: ' "$label" "$default_label" >/dev/tty
+  read -r answer </dev/tty || answer=""
+
+  if [[ -n "$answer" ]]; then
+    printf -v "$var_name" '%s' "$answer"
+  else
+    printf -v "$var_name" '%s' "$current"
+  fi
+}
+
+prompt_secret_optional() {
+  local var_name="$1"
+  local label="$2"
+  local answer=""
+
+  printf '%s [auto]: ' "$label" >/dev/tty
+  read -r -s answer </dev/tty || answer=""
+  printf '\n' >/dev/tty
+
+  if [[ -n "$answer" ]]; then
+    printf -v "$var_name" '%s' "$answer"
+  fi
+}
+
+prompt_yes_no() {
+  local var_name="$1"
+  local label="$2"
+  local current="$3"
+  local answer=""
+  local normalized=""
+  local hint="y/N"
+
+  [[ "$current" == "1" ]] && hint="Y/n"
+
+  while true; do
+    printf '%s [%s]: ' "$label" "$hint" >/dev/tty
+    read -r answer </dev/tty || answer=""
+
+    if [[ -z "$answer" ]]; then
+      printf -v "$var_name" '%s' "$current"
+      return 0
+    fi
+
+    normalized="$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')"
+    case "$normalized" in
+      1|true|yes|y|on|enable|enabled)
+        printf -v "$var_name" '1'
+        return 0
+        ;;
+      0|false|no|n|off|disable|disabled)
+        printf -v "$var_name" '0'
+        return 0
+        ;;
+      *)
+        printf 'Please enter y or n.\n' >/dev/tty
+        ;;
+    esac
+  done
+}
+
+normalize_bool_var() {
+  local var_name="$1"
+  local value="${!var_name}"
+  local normalized
+
+  normalized="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  case "$normalized" in
+    1|true|yes|y|on|enable|enabled)
+      printf -v "$var_name" '1'
+      ;;
+    0|false|no|n|off|disable|disabled)
+      printf -v "$var_name" '0'
+      ;;
+    *)
+      die "$var_name must be 1 or 0"
+      ;;
+  esac
+}
+
+normalize_bool_vars() {
+  normalize_bool_var ENABLE_OBFS
+  normalize_bool_var OPEN_FIREWALL
+  normalize_bool_var INSTALL_DEPS
+  normalize_bool_var ENABLE_PANEL
+  normalize_bool_var PANEL_OPEN_FIREWALL
+}
+
+configure_interactive() {
+  prompt_enabled || return 0
+
+  local panel_public="1"
+
+  printf '\nHysteria 2 installer setup. Press Enter to keep the default shown in brackets.\n\n' >/dev/tty
+
+  prompt_value SERVER_HOST "Server address for import link, blank means auto-detect public IPv4" "$SERVER_HOST" "auto"
+  prompt_value PORT "Hysteria UDP port" "$PORT"
+  prompt_yes_no OPEN_FIREWALL "Open this UDP port in the server OS firewall" "$OPEN_FIREWALL"
+  prompt_yes_no ENABLE_OBFS "Enable Salamander obfuscation" "$ENABLE_OBFS"
+  if [[ "$ENABLE_OBFS" == "1" ]]; then
+    prompt_secret_optional OBFS_PASS "Salamander obfs password, blank means random"
+  fi
+  prompt_value SNI "TLS SNI / certificate name" "$SNI"
+  prompt_value MASQUERADE_URL "Masquerade target URL" "$MASQUERADE_URL"
+  prompt_value TAG "Import link tag" "$TAG"
+  prompt_yes_no ENABLE_PANEL "Enable multi-user web panel" "$ENABLE_PANEL"
+
+  if [[ "$ENABLE_PANEL" == "1" ]]; then
+    prompt_value PANEL_PORT "Web panel TCP port" "$PANEL_PORT"
+    if [[ "$PANEL_BIND" == "127.0.0.1" || "$PANEL_BIND" == "localhost" ]]; then
+      panel_public="0"
+    fi
+    prompt_yes_no panel_public "Allow web panel access from the public internet" "$panel_public"
+    if [[ "$panel_public" == "1" ]]; then
+      PANEL_BIND="0.0.0.0"
+      PANEL_OPEN_FIREWALL="1"
+    else
+      PANEL_BIND="127.0.0.1"
+      PANEL_OPEN_FIREWALL="0"
+    fi
+    prompt_value PANEL_ADMIN_USER "Web panel admin username" "$PANEL_ADMIN_USER"
+    prompt_secret_optional PANEL_ADMIN_PASS "Web panel admin password, blank means random or keep existing"
+    prompt_value INITIAL_USER "Initial Hysteria username" "$INITIAL_USER"
+    prompt_secret_optional INITIAL_USER_PASS "Initial Hysteria user password, blank means random"
+  else
+    prompt_secret_optional AUTH_PASS "Hysteria auth password, blank means random"
+  fi
+
+  printf '\n' >/dev/tty
+}
 
 need_root() {
   if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
@@ -521,6 +679,9 @@ print_summary() {
 main() {
   need_root
   require_systemd
+  normalize_bool_vars
+  configure_interactive
+  normalize_bool_vars
   validate_port
   install_packages
   ensure_commands

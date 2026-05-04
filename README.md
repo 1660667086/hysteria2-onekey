@@ -14,6 +14,25 @@
 
 ## 一键安装
 
+直接运行会进入交互式安装向导。每一项都带默认值，直接按回车就会使用默认配置：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/1660667086/hysteria2-onekey/main/install.sh)
+```
+
+安装时可以选择：
+
+- 导入链接里的服务器地址：默认自动探测公网 IPv4
+- Hysteria UDP 端口：默认 `443`
+- 是否放行系统防火墙 UDP 端口：默认开启
+- 是否开启 Salamander 混淆：默认开启
+- Salamander 混淆密码：默认自动随机生成
+- SNI / 证书名称：默认 `www.bing.com`
+- 伪装站：默认 `https://www.bing.com/`
+- 是否开启多用户 Web 面板：默认关闭
+- Web 面板端口、公网访问、管理账号和管理密码
+- 初始 Hysteria 用户名和密码
+
 单用户安装：
 
 ```bash
@@ -68,6 +87,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/1660667086/hysteria2-onekey/
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
+| `INTERACTIVE` | `auto` | 有终端时显示交互向导；设为 `0` 可全自动无提示安装 |
 | `PORT` | `443` | Hysteria 监听端口，脚本会放行 `UDP` |
 | `SERVER_HOST` | 自动探测公网 IPv4 | 导入链接里的服务器地址，可填域名或 IP |
 | `SNI` | `www.bing.com` | TLS SNI 和自签证书 CN/SAN |
@@ -78,6 +98,16 @@ bash <(curl -fsSL https://raw.githubusercontent.com/1660667086/hysteria2-onekey/
 | `TAG` | `hysteria2` | 导入链接备注 |
 | `OPEN_FIREWALL` | `1` | 设为 `0` 跳过系统防火墙放行 |
 | `INSTALL_DEPS` | `1` | 设为 `0` 跳过依赖安装 |
+
+全自动无提示安装示例：
+
+```bash
+INTERACTIVE=0 \
+ENABLE_PANEL=1 \
+PANEL_ADMIN_USER=admin \
+PANEL_ADMIN_PASS='换成你的强密码' \
+bash <(curl -fsSL https://raw.githubusercontent.com/1660667086/hysteria2-onekey/main/install.sh)
+```
 
 Web 面板变量：
 
