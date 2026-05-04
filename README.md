@@ -10,19 +10,33 @@
 - 认证密码：自动随机生成
 - 伪装站：`https://www.bing.com/`
 - 服务：`hysteria-server.service`
+- 可选：多用户 Web 管理面板
 
 ## 一键安装
 
-发布到 GitHub 后，把命令里的 `<your-github-user>` 换成你的 GitHub 用户名：
+单用户安装：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/<your-github-user>/hysteria2-onekey/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/1660667086/hysteria2-onekey/main/install.sh)
+```
+
+多用户 + Web 面板安装：
+
+```bash
+ENABLE_PANEL=1 \
+bash <(curl -fsSL https://raw.githubusercontent.com/1660667086/hysteria2-onekey/main/install.sh)
+```
+
+默认 Web 面板只监听 `127.0.0.1:8080`，更安全。远程访问时先在本机开 SSH 隧道：
+
+```bash
+ssh -L 8080:127.0.0.1:8080 root@你的服务器IP
 ```
 
 如果服务器不能访问 `raw.githubusercontent.com`，可以先拉仓库再运行：
 
 ```bash
-git clone https://github.com/<your-github-user>/hysteria2-onekey.git
+git clone https://github.com/1660667086/hysteria2-onekey.git
 cd hysteria2-onekey
 bash install.sh
 ```
@@ -36,7 +50,7 @@ PORT=8443 \
 SNI=www.bing.com \
 MASQUERADE_URL=https://www.bing.com/ \
 TAG=my-hy2 \
-bash <(curl -fsSL https://raw.githubusercontent.com/<your-github-user>/hysteria2-onekey/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/1660667086/hysteria2-onekey/main/install.sh)
 ```
 
 常用变量：
@@ -53,6 +67,49 @@ bash <(curl -fsSL https://raw.githubusercontent.com/<your-github-user>/hysteria2
 | `TAG` | `hysteria2` | 导入链接备注 |
 | `OPEN_FIREWALL` | `1` | 设为 `0` 跳过系统防火墙放行 |
 | `INSTALL_DEPS` | `1` | 设为 `0` 跳过依赖安装 |
+
+Web 面板变量：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `ENABLE_PANEL` | `0` | 设为 `1` 启用多用户 Web 面板 |
+| `PANEL_BIND` | `127.0.0.1` | 面板监听地址，公网访问可设为 `0.0.0.0` |
+| `PANEL_PORT` | `8080` | 面板 TCP 端口 |
+| `PANEL_ADMIN_USER` | `admin` | 面板登录用户名 |
+| `PANEL_ADMIN_PASS` | 自动随机 | 面板登录密码 |
+| `PANEL_OPEN_FIREWALL` | `0` | 设为 `1` 时放行面板 TCP 端口 |
+| `INITIAL_USER` | `user1` | 初始 Hysteria 用户名 |
+| `INITIAL_USER_PASS` | 自动随机 | 初始 Hysteria 用户密码 |
+
+如果你确实要把面板暴露到公网：
+
+```bash
+ENABLE_PANEL=1 \
+PANEL_BIND=0.0.0.0 \
+PANEL_OPEN_FIREWALL=1 \
+bash <(curl -fsSL https://raw.githubusercontent.com/1660667086/hysteria2-onekey/main/install.sh)
+```
+
+公网面板一定要使用强密码，并在云安全组中只允许自己的 IP 访问 `PANEL_PORT`。
+
+## Web 面板功能
+
+启用 `ENABLE_PANEL=1` 后，脚本会额外安装并启动：
+
+- `hysteria-panel.service`
+- `/opt/hysteria2-onekey/panel.py`
+- `/etc/hysteria/users.json`
+- `/etc/hysteria/server.json`
+
+面板支持：
+
+- 新增用户
+- 删除用户
+- 启用/停用用户
+- 重置用户密码
+- 自动生成每个用户的 Hysteria2 导入链接
+- 自动重写 `/etc/hysteria/config.yaml`
+- 自动重启 `hysteria-server.service`
 
 ## 云安全组
 
@@ -79,6 +136,7 @@ systemctl status hysteria-server.service
 journalctl --no-pager -u hysteria-server.service -n 80
 nano /etc/hysteria/config.yaml
 systemctl restart hysteria-server.service
+systemctl status hysteria-panel.service
 ```
 
 ## 卸载 Hysteria

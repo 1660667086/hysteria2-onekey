@@ -1,0 +1,470 @@
+#!/usr/bin/env python3
+import base64
+import grp
+import hmac
+import html
+import json
+import os
+import secrets
+import shlex
+import subprocess
+import sys
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, quote, urlencode, urlparse
+
+
+CONFIG_DIR = os.environ.get("CONFIG_DIR", "/etc/hysteria")
+CONFIG_FILE = os.environ.get("CONFIG_FILE", os.path.join(CONFIG_DIR, "config.yaml"))
+USERS_FILE = os.environ.get("USERS_FILE", os.path.join(CONFIG_DIR, "users.json"))
+SERVER_META_FILE = os.environ.get("SERVER_META_FILE", os.path.join(CONFIG_DIR, "server.json"))
+CERT_FILE = os.environ.get("CERT_FILE", os.path.join(CONFIG_DIR, "server.crt"))
+KEY_FILE = os.environ.get("KEY_FILE", os.path.join(CONFIG_DIR, "server.key"))
+PANEL_BIND = os.environ.get("PANEL_BIND", "127.0.0.1")
+PANEL_PORT = int(os.environ.get("PANEL_PORT", "8080"))
+PANEL_ADMIN_USER = os.environ.get("PANEL_ADMIN_USER", "admin")
+PANEL_ADMIN_PASS = os.environ.get("PANEL_ADMIN_PASS", "")
+RESTART_CMD = os.environ.get("HYSTERIA_RESTART_CMD", "systemctl restart hysteria-server.service")
+CSRF_TOKEN = secrets.token_urlsafe(32)
+
+
+def atomic_write(path, data, mode=0o600):
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(data)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def read_json(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return default
+
+
+def load_users():
+    data = read_json(USERS_FILE, {"users": []})
+    users = data.get("users", [])
+    clean = []
+    for user in users:
+        name = str(user.get("name", "")).strip()
+        password = str(user.get("password", ""))
+        if not name or not password:
+            continue
+        clean.append(
+            {
+                "name": name,
+                "password": password,
+                "enabled": bool(user.get("enabled", True)),
+                "created_at": user.get("created_at", ""),
+            }
+        )
+    return clean
+
+
+def save_users(users):
+    atomic_write(
+        USERS_FILE,
+        json.dumps({"users": users}, indent=2, ensure_ascii=False) + "\n",
+        0o600,
+    )
+
+
+def load_meta():
+    meta = read_json(SERVER_META_FILE, {})
+    return {
+        "host": str(meta.get("host", "")),
+        "port": int(meta.get("port", 443)),
+        "sni": str(meta.get("sni", "www.bing.com")),
+        "masquerade_url": str(meta.get("masquerade_url", "https://www.bing.com/")),
+        "enable_obfs": bool(meta.get("enable_obfs", True)),
+        "obfs_pass": str(meta.get("obfs_pass", "")),
+        "tag": str(meta.get("tag", "hysteria2")),
+        "cert_file": str(meta.get("cert_file", CERT_FILE)),
+        "key_file": str(meta.get("key_file", KEY_FILE)),
+    }
+
+
+def yaml_string(value):
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def render_config():
+    meta = load_meta()
+    users = [user for user in load_users() if user.get("enabled")]
+    if not users:
+        raise RuntimeError("at least one enabled Hysteria user is required")
+
+    lines = [
+        f"listen: :{meta['port']}",
+        "",
+        "tls:",
+        f"  cert: {yaml_string(meta['cert_file'])}",
+        f"  key: {yaml_string(meta['key_file'])}",
+        "  sniGuard: disable",
+        "",
+        "auth:",
+        "  type: userpass",
+        "  userpass:",
+    ]
+
+    for user in users:
+        lines.append(f"    {yaml_string(user['name'])}: {yaml_string(user['password'])}")
+
+    if meta["enable_obfs"]:
+        lines.extend(
+            [
+                "",
+                "obfs:",
+                "  type: salamander",
+                "  salamander:",
+                f"    password: {yaml_string(meta['obfs_pass'])}",
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            "masquerade:",
+            "  type: proxy",
+            "  proxy:",
+            f"    url: {yaml_string(meta['masquerade_url'])}",
+            "    rewriteHost: true",
+            "",
+        ]
+    )
+
+    atomic_write(CONFIG_FILE, "\n".join(lines), 0o640)
+    try:
+        os.chown(CONFIG_FILE, 0, grp.getgrnam("hysteria").gr_gid)
+    except Exception:
+        pass
+    return CONFIG_FILE
+
+
+def restart_hysteria():
+    render_config()
+    subprocess.run(shlex.split(RESTART_CMD), check=True)
+
+
+def certificate_fingerprint(cert_file):
+    try:
+        out = subprocess.check_output(
+            ["openssl", "x509", "-noout", "-fingerprint", "-sha256", "-in", cert_file],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return ""
+    return out.strip().split("=", 1)[-1]
+
+
+def build_uri(user):
+    meta = load_meta()
+    host = meta["host"]
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    auth = f"{quote(user['name'], safe='')}:{quote(user['password'], safe='')}"
+    params = {
+        "insecure": "1",
+        "sni": meta["sni"],
+    }
+    if meta["enable_obfs"]:
+        params["obfs"] = "salamander"
+        params["obfs-password"] = meta["obfs_pass"]
+    fingerprint = certificate_fingerprint(meta["cert_file"])
+    if fingerprint:
+        params["pinSHA256"] = fingerprint
+    tag = quote(f"{meta['tag']}-{user['name']}", safe="")
+    return f"hysteria2://{auth}@{host}:{meta['port']}/?{urlencode(params, safe=':')}#{tag}"
+
+
+def valid_username(name):
+    if not 1 <= len(name) <= 64:
+        return False
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.@-")
+    return all(ch in allowed for ch in name)
+
+
+def now_iso():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def find_user(users, name):
+    for user in users:
+        if user["name"] == name:
+            return user
+    return None
+
+
+def enabled_count(users):
+    return sum(1 for user in users if user.get("enabled"))
+
+
+class PanelHandler(BaseHTTPRequestHandler):
+    server_version = "HysteriaPanel/1.0"
+
+    def log_message(self, fmt, *args):
+        sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
+
+    def require_auth(self):
+        header = self.headers.get("Authorization", "")
+        if not header.startswith("Basic "):
+            return False
+        try:
+            raw = base64.b64decode(header[6:], validate=True).decode("utf-8")
+        except Exception:
+            return False
+        username, sep, password = raw.partition(":")
+        if not sep:
+            return False
+        return hmac.compare_digest(username, PANEL_ADMIN_USER) and hmac.compare_digest(
+            password, PANEL_ADMIN_PASS
+        )
+
+    def send_auth_required(self):
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="Hysteria 2 Panel"')
+        self.end_headers()
+
+    def send_text(self, text, status=200, content_type="text/plain; charset=utf-8"):
+        body = text.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Frame-Options", "DENY")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def redirect(self, message=""):
+        location = "/"
+        if message:
+            location += "?msg=" + quote(message)
+        self.send_response(303)
+        self.send_header("Location", location)
+        self.end_headers()
+
+    def parse_post(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        if length > 65536:
+            raise ValueError("request body too large")
+        body = self.rfile.read(length).decode("utf-8")
+        form = {key: values[-1] for key, values in parse_qs(body).items()}
+        if form.get("csrf") != CSRF_TOKEN:
+            raise ValueError("invalid CSRF token")
+        return form
+
+    def do_GET(self):
+        if not self.require_auth():
+            self.send_auth_required()
+            return
+        path = urlparse(self.path)
+        if path.path == "/uri":
+            name = parse_qs(path.query).get("u", [""])[0]
+            user = find_user(load_users(), name)
+            if not user:
+                self.send_text("user not found\n", 404)
+                return
+            self.send_text(build_uri(user) + "\n")
+            return
+        self.send_text(self.render_page(path), content_type="text/html; charset=utf-8")
+
+    def do_POST(self):
+        if not self.require_auth():
+            self.send_auth_required()
+            return
+        try:
+            form = self.parse_post()
+            action = urlparse(self.path).path
+            if action == "/users/add":
+                self.add_user(form)
+            elif action == "/users/delete":
+                self.delete_user(form)
+            elif action == "/users/toggle":
+                self.toggle_user(form)
+            elif action == "/users/password":
+                self.change_password(form)
+            elif action == "/service/restart":
+                restart_hysteria()
+                self.redirect("service restarted")
+            else:
+                self.send_text("not found\n", 404)
+        except Exception as exc:
+            self.redirect(f"error: {exc}")
+
+    def add_user(self, form):
+        name = form.get("name", "").strip()
+        password = form.get("password", "").strip() or secrets.token_hex(16)
+        if not valid_username(name):
+            raise ValueError("username must be 1-64 chars: letters, numbers, _ . @ -")
+        if len(password) < 6:
+            raise ValueError("password must be at least 6 chars")
+        users = load_users()
+        if find_user(users, name):
+            raise ValueError("user already exists")
+        users.append({"name": name, "password": password, "enabled": True, "created_at": now_iso()})
+        save_users(users)
+        restart_hysteria()
+        self.redirect(f"user {name} added")
+
+    def delete_user(self, form):
+        name = form.get("name", "").strip()
+        users = load_users()
+        user = find_user(users, name)
+        if not user:
+            raise ValueError("user not found")
+        if user.get("enabled") and enabled_count(users) <= 1:
+            raise ValueError("cannot delete the last enabled user")
+        users = [item for item in users if item["name"] != name]
+        save_users(users)
+        restart_hysteria()
+        self.redirect(f"user {name} deleted")
+
+    def toggle_user(self, form):
+        name = form.get("name", "").strip()
+        users = load_users()
+        user = find_user(users, name)
+        if not user:
+            raise ValueError("user not found")
+        if user.get("enabled") and enabled_count(users) <= 1:
+            raise ValueError("cannot disable the last enabled user")
+        user["enabled"] = not user.get("enabled")
+        save_users(users)
+        restart_hysteria()
+        self.redirect(f"user {name} updated")
+
+    def change_password(self, form):
+        name = form.get("name", "").strip()
+        password = form.get("password", "").strip() or secrets.token_hex(16)
+        if len(password) < 6:
+            raise ValueError("password must be at least 6 chars")
+        users = load_users()
+        user = find_user(users, name)
+        if not user:
+            raise ValueError("user not found")
+        user["password"] = password
+        save_users(users)
+        restart_hysteria()
+        self.redirect(f"password changed for {name}")
+
+    def render_page(self, parsed):
+        msg = parse_qs(parsed.query).get("msg", [""])[0]
+        users = load_users()
+        rows = []
+        for user in users:
+            name = html.escape(user["name"])
+            status = "enabled" if user.get("enabled") else "disabled"
+            uri = html.escape(build_uri(user))
+            toggle = "Disable" if user.get("enabled") else "Enable"
+            rows.append(
+                f"""
+                <tr>
+                  <td><strong>{name}</strong><br><span class="muted">{html.escape(user.get('created_at', ''))}</span></td>
+                  <td><span class="badge {status}">{status}</span></td>
+                  <td><input readonly value="{uri}" onclick="this.select()"></td>
+                  <td class="actions">
+                    <form method="post" action="/users/toggle"><input type="hidden" name="csrf" value="{CSRF_TOKEN}"><input type="hidden" name="name" value="{name}"><button>{toggle}</button></form>
+                    <form method="post" action="/users/password"><input type="hidden" name="csrf" value="{CSRF_TOKEN}"><input type="hidden" name="name" value="{name}"><input name="password" placeholder="new or blank random"><button>Set Pass</button></form>
+                    <form method="post" action="/users/delete"><input type="hidden" name="csrf" value="{CSRF_TOKEN}"><input type="hidden" name="name" value="{name}"><button class="danger">Delete</button></form>
+                  </td>
+                </tr>
+                """
+            )
+
+        meta = load_meta()
+        flash = f'<div class="flash">{html.escape(msg)}</div>' if msg else ""
+        return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Hysteria 2 Panel</title>
+  <style>
+    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f7fb; color: #202635; }}
+    header {{ background: #172033; color: white; padding: 24px 32px; }}
+    main {{ max-width: 1180px; margin: 24px auto; padding: 0 20px; }}
+    section {{ background: white; border: 1px solid #e0e5ef; border-radius: 8px; margin-bottom: 18px; padding: 20px; }}
+    h1, h2 {{ margin: 0 0 14px; }}
+    table {{ width: 100%; border-collapse: collapse; }}
+    th, td {{ text-align: left; border-bottom: 1px solid #edf0f5; padding: 12px; vertical-align: top; }}
+    input {{ box-sizing: border-box; width: 100%; border: 1px solid #cfd7e6; border-radius: 6px; padding: 10px 12px; font-size: 14px; }}
+    button {{ border: 0; border-radius: 6px; background: #2563eb; color: white; padding: 9px 13px; cursor: pointer; }}
+    button.danger {{ background: #dc2626; }}
+    .actions {{ min-width: 360px; }}
+    .actions form {{ display: flex; gap: 8px; margin: 0 0 8px; }}
+    .actions input[name=password] {{ width: 180px; }}
+    .grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }}
+    .muted {{ color: #697386; font-size: 13px; }}
+    .badge {{ display: inline-block; padding: 4px 8px; border-radius: 999px; font-size: 13px; }}
+    .badge.enabled {{ color: #166534; background: #dcfce7; }}
+    .badge.disabled {{ color: #7f1d1d; background: #fee2e2; }}
+    .flash {{ background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; padding: 12px; border-radius: 6px; margin-bottom: 14px; }}
+    @media (max-width: 880px) {{
+      .grid {{ grid-template-columns: 1fr; }}
+      table, thead, tbody, tr, th, td {{ display: block; }}
+      .actions {{ min-width: 0; }}
+    }}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Hysteria 2 Panel</h1>
+    <div>{html.escape(meta['host'])}:{meta['port']} / SNI {html.escape(meta['sni'])}</div>
+  </header>
+  <main>
+    {flash}
+    <section>
+      <h2>Add User</h2>
+      <form class="grid" method="post" action="/users/add">
+        <input type="hidden" name="csrf" value="{CSRF_TOKEN}">
+        <input name="name" placeholder="username" required>
+        <input name="password" placeholder="password, blank = random">
+        <button>Add and Restart</button>
+      </form>
+    </section>
+    <section>
+      <h2>Users</h2>
+      <table>
+        <thead><tr><th>User</th><th>Status</th><th>Import Link</th><th>Actions</th></tr></thead>
+        <tbody>{''.join(rows)}</tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Service</h2>
+      <form method="post" action="/service/restart">
+        <input type="hidden" name="csrf" value="{CSRF_TOKEN}">
+        <button>Rewrite Config and Restart Hysteria</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>
+"""
+
+
+def main():
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--render":
+            print(render_config())
+            return
+        if sys.argv[1] == "--print-uri":
+            username = sys.argv[2]
+            user = find_user(load_users(), username)
+            if not user:
+                raise SystemExit("user not found")
+            print(build_uri(user))
+            return
+
+    if not PANEL_ADMIN_PASS:
+        raise SystemExit("PANEL_ADMIN_PASS is required")
+    httpd = ThreadingHTTPServer((PANEL_BIND, PANEL_PORT), PanelHandler)
+    print(f"Hysteria 2 panel listening on {PANEL_BIND}:{PANEL_PORT}", flush=True)
+    httpd.serve_forever()
+
+
+if __name__ == "__main__":
+    main()
