@@ -37,7 +37,7 @@ red() { printf '\033[31m%s\033[0m\n' "$*" >&2; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
 yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
 log() { printf '[%s] %s\n' "$SCRIPT_NAME" "$*"; }
-die() { red "ERROR: $*"; exit 1; }
+die() { red "错误：$*"; exit 1; }
 
 prompt_enabled() {
   local value
@@ -54,7 +54,7 @@ prompt_enabled() {
       [[ -r /dev/tty && -w /dev/tty ]]
       ;;
     *)
-      die "INTERACTIVE must be auto, 1 or 0"
+      die "INTERACTIVE 必须是 auto、1 或 0"
       ;;
   esac
 }
@@ -81,7 +81,7 @@ prompt_secret_optional() {
   local label="$2"
   local answer=""
 
-  printf '%s [auto]: ' "$label" >/dev/tty
+  printf '%s [自动]: ' "$label" >/dev/tty
   read -r -s answer </dev/tty || answer=""
   printf '\n' >/dev/tty
 
@@ -120,7 +120,7 @@ prompt_yes_no() {
         return 0
         ;;
       *)
-        printf 'Please enter y or n.\n' >/dev/tty
+        printf '请输入 y 或 n。\n' >/dev/tty
         ;;
     esac
   done
@@ -140,7 +140,7 @@ normalize_bool_var() {
       printf -v "$var_name" '0'
       ;;
     *)
-      die "$var_name must be 1 or 0"
+      die "$var_name 必须是 1 或 0"
       ;;
   esac
 }
@@ -158,26 +158,26 @@ configure_interactive() {
 
   local panel_public="1"
 
-  printf '\nHysteria 2 installer setup. Press Enter to keep the default shown in brackets.\n\n' >/dev/tty
+  printf '\nHysteria 2 安装向导。直接按回车会使用括号里的默认值。\n\n' >/dev/tty
 
-  prompt_value SERVER_HOST "Server address for import link, blank means auto-detect public IPv4" "$SERVER_HOST" "auto"
-  prompt_value PORT "Hysteria UDP port" "$PORT"
-  prompt_yes_no OPEN_FIREWALL "Open this UDP port in the server OS firewall" "$OPEN_FIREWALL"
-  prompt_yes_no ENABLE_OBFS "Enable Salamander obfuscation" "$ENABLE_OBFS"
+  prompt_value SERVER_HOST "导入链接里的服务器地址，留空表示自动检测公网 IPv4" "$SERVER_HOST" "自动"
+  prompt_value PORT "Hysteria UDP 端口" "$PORT"
+  prompt_yes_no OPEN_FIREWALL "是否放行服务器系统防火墙里的这个 UDP 端口" "$OPEN_FIREWALL"
+  prompt_yes_no ENABLE_OBFS "是否开启 Salamander 混淆" "$ENABLE_OBFS"
   if [[ "$ENABLE_OBFS" == "1" ]]; then
-    prompt_secret_optional OBFS_PASS "Salamander obfs password, blank means random"
+    prompt_secret_optional OBFS_PASS "Salamander 混淆密码，留空表示随机生成"
   fi
-  prompt_value SNI "TLS SNI / certificate name" "$SNI"
-  prompt_value MASQUERADE_URL "Masquerade target URL" "$MASQUERADE_URL"
-  prompt_value TAG "Import link tag" "$TAG"
-  prompt_yes_no ENABLE_PANEL "Enable multi-user web panel" "$ENABLE_PANEL"
+  prompt_value SNI "TLS SNI / 证书名称" "$SNI"
+  prompt_value MASQUERADE_URL "伪装站目标 URL" "$MASQUERADE_URL"
+  prompt_value TAG "导入链接备注名称" "$TAG"
+  prompt_yes_no ENABLE_PANEL "是否开启多用户 Web 管理面板" "$ENABLE_PANEL"
 
   if [[ "$ENABLE_PANEL" == "1" ]]; then
-    prompt_value PANEL_PORT "Web panel TCP port" "$PANEL_PORT"
+    prompt_value PANEL_PORT "Web 面板 TCP 端口" "$PANEL_PORT"
     if [[ "$PANEL_BIND" == "127.0.0.1" || "$PANEL_BIND" == "localhost" ]]; then
       panel_public="0"
     fi
-    prompt_yes_no panel_public "Allow web panel access from the public internet" "$panel_public"
+    prompt_yes_no panel_public "是否允许 Web 面板公网访问" "$panel_public"
     if [[ "$panel_public" == "1" ]]; then
       PANEL_BIND="0.0.0.0"
       PANEL_OPEN_FIREWALL="1"
@@ -185,12 +185,12 @@ configure_interactive() {
       PANEL_BIND="127.0.0.1"
       PANEL_OPEN_FIREWALL="0"
     fi
-    prompt_value PANEL_ADMIN_USER "Web panel admin username" "$PANEL_ADMIN_USER"
-    prompt_secret_optional PANEL_ADMIN_PASS "Web panel admin password, blank means random or keep existing"
-    prompt_value INITIAL_USER "Initial Hysteria username" "$INITIAL_USER"
-    prompt_secret_optional INITIAL_USER_PASS "Initial Hysteria user password, blank means random"
+    prompt_value PANEL_ADMIN_USER "Web 面板管理员账号" "$PANEL_ADMIN_USER"
+    prompt_secret_optional PANEL_ADMIN_PASS "Web 面板管理员密码，留空表示随机生成或沿用现有密码"
+    prompt_value INITIAL_USER "初始 Hysteria 用户名" "$INITIAL_USER"
+    prompt_secret_optional INITIAL_USER_PASS "初始 Hysteria 用户密码，留空表示随机生成"
   else
-    prompt_secret_optional AUTH_PASS "Hysteria auth password, blank means random"
+    prompt_secret_optional AUTH_PASS "Hysteria 认证密码，留空表示随机生成"
   fi
 
   printf '\n' >/dev/tty
@@ -198,22 +198,22 @@ configure_interactive() {
 
 need_root() {
   if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-    die "please run as root"
+    die "请使用 root 用户运行"
   fi
 }
 
 require_systemd() {
-  command -v systemctl >/dev/null 2>&1 || die "systemctl not found; this installer requires systemd"
+  command -v systemctl >/dev/null 2>&1 || die "未找到 systemctl；此脚本需要 systemd"
 }
 
 validate_port() {
-  [[ "$PORT" =~ ^[0-9]+$ ]] || die "PORT must be a number"
-  (( PORT >= 1 && PORT <= 65535 )) || die "PORT must be between 1 and 65535"
+  [[ "$PORT" =~ ^[0-9]+$ ]] || die "PORT 必须是数字"
+  (( PORT >= 1 && PORT <= 65535 )) || die "PORT 必须在 1 到 65535 之间"
 
   if [[ "$ENABLE_PANEL" == "1" ]]; then
-    [[ "$PANEL_PORT" =~ ^[0-9]+$ ]] || die "PANEL_PORT must be a number"
-    (( PANEL_PORT >= 1 && PANEL_PORT <= 65535 )) || die "PANEL_PORT must be between 1 and 65535"
-    [[ "$INITIAL_USER" =~ ^[A-Za-z0-9_.@-]{1,64}$ ]] || die "INITIAL_USER must be 1-64 chars: letters, numbers, _ . @ -"
+    [[ "$PANEL_PORT" =~ ^[0-9]+$ ]] || die "PANEL_PORT 必须是数字"
+    (( PANEL_PORT >= 1 && PANEL_PORT <= 65535 )) || die "PANEL_PORT 必须在 1 到 65535 之间"
+    [[ "$INITIAL_USER" =~ ^[A-Za-z0-9_.@-]{1,64}$ ]] || die "INITIAL_USER 必须是 1-64 个字符，只能包含字母、数字、_ . @ -"
   fi
 }
 
@@ -237,7 +237,7 @@ install_packages() {
   elif command -v zypper >/dev/null 2>&1; then
     zypper --non-interactive install "${packages[@]}" ca-certificates
   else
-    yellow "No supported package manager found; assuming curl, openssl and iptables already exist."
+    yellow "未找到支持的包管理器；将假设 curl、openssl 和 iptables 已经存在。"
   fi
 }
 
@@ -254,7 +254,7 @@ ensure_commands() {
   fi
 
   if ((${#missing[@]} > 0)); then
-    die "missing required command(s): ${missing[*]}"
+    die "缺少必要命令：${missing[*]}"
   fi
 }
 
@@ -282,14 +282,14 @@ detect_public_ip() {
   done
 
   ip="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
-  [[ -n "$ip" ]] || die "could not detect public IP; rerun with SERVER_HOST=your.domain.or.ip"
+  [[ -n "$ip" ]] || die "无法检测公网 IP；请使用 SERVER_HOST=你的域名或IP 重新运行"
   printf '%s\n' "$ip"
 }
 
 install_hysteria() {
-  log "Installing or upgrading Hysteria 2 from official script..."
+  log "正在通过官方脚本安装或升级 Hysteria 2..."
   bash <(curl -fsSL "$HYSTERIA_INSTALL_URL")
-  command -v hysteria >/dev/null 2>&1 || die "hysteria binary was not installed"
+  command -v hysteria >/dev/null 2>&1 || die "hysteria 程序未安装成功"
 }
 
 json_escape() {
@@ -371,7 +371,7 @@ write_panel_state() {
 install_panel() {
   [[ "$ENABLE_PANEL" == "1" ]] || return 0
 
-  log "Installing Hysteria web panel..."
+  log "正在安装 Hysteria Web 管理面板..."
   mkdir -p "$PANEL_DIR"
 
   local script_dir=""
@@ -448,7 +448,7 @@ write_config() {
 
   mkdir -p "$CONFIG_DIR"
 
-  log "Generating self-signed certificate for SNI $SNI..."
+  log "正在为 SNI $SNI 生成自签证书..."
   openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
     -keyout "$KEY_FILE" \
     -out "$CERT_FILE" \
@@ -459,10 +459,10 @@ write_config() {
     reuse_existing_panel_password
     write_panel_state "$host"
     install_panel
-    log "Writing multi-user Hysteria server config to $CONFIG_FILE..."
+    log "正在写入多用户 Hysteria 服务端配置：$CONFIG_FILE"
     run_panel_cli --render >/dev/null
   else
-    log "Writing Hysteria server config to $CONFIG_FILE..."
+    log "正在写入 Hysteria 服务端配置：$CONFIG_FILE"
     {
       printf 'listen: :%s\n\n' "$PORT"
       printf 'tls:\n'
@@ -531,14 +531,14 @@ save_iptables() {
       ip6tables-save >/etc/iptables/rules.v6 || true
     fi
   else
-    yellow "Could not persist iptables automatically. The current runtime firewall was updated."
+    yellow "无法自动持久化 iptables 规则；当前运行时防火墙已经更新。"
   fi
 }
 
 open_firewall() {
   [[ "$OPEN_FIREWALL" == "1" ]] || return 0
 
-  log "Opening UDP port $PORT..."
+  log "正在放行 UDP 端口 $PORT..."
 
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then
     ufw allow "$PORT/udp"
@@ -562,11 +562,11 @@ open_panel_firewall() {
   [[ "$ENABLE_PANEL" == "1" ]] || return 0
   [[ "$PANEL_OPEN_FIREWALL" == "1" ]] || return 0
   [[ "$PANEL_BIND" != "127.0.0.1" && "$PANEL_BIND" != "localhost" ]] || {
-    yellow "Panel firewall was requested, but PANEL_BIND=$PANEL_BIND is local-only."
+    yellow "已请求放行面板端口，但 PANEL_BIND=$PANEL_BIND 仅允许本机访问。"
     return 0
   }
 
-  log "Opening TCP panel port $PANEL_PORT..."
+  log "正在放行 Web 面板 TCP 端口 $PANEL_PORT..."
 
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then
     ufw allow "$PANEL_PORT/tcp"
@@ -587,21 +587,21 @@ open_panel_firewall() {
 }
 
 start_service() {
-  log "Starting Hysteria service..."
+  log "正在启动 Hysteria 服务..."
   systemctl daemon-reload
   systemctl enable --now hysteria-server.service
   systemctl restart hysteria-server.service
   sleep 2
   systemctl is-active --quiet hysteria-server.service || {
     systemctl --no-pager --full status hysteria-server.service || true
-    die "hysteria-server.service is not active"
+    die "hysteria-server.service 未正常运行"
   }
 }
 
 start_panel_service() {
   [[ "$ENABLE_PANEL" == "1" ]] || return 0
 
-  log "Starting Hysteria web panel..."
+  log "正在启动 Hysteria Web 管理面板..."
   systemctl daemon-reload
   systemctl enable --now hysteria-panel.service
   systemctl restart hysteria-panel.service
@@ -609,11 +609,11 @@ start_panel_service() {
   sleep 1
   systemctl is-active --quiet hysteria-panel.service || {
     systemctl --no-pager --full status hysteria-panel.service || true
-    die "hysteria-panel.service is not active"
+    die "hysteria-panel.service 未正常运行"
   }
   systemctl is-active --quiet hysteria-expire-users.timer || {
     systemctl --no-pager --full status hysteria-expire-users.timer || true
-    die "hysteria-expire-users.timer is not active"
+    die "hysteria-expire-users.timer 未正常运行"
   }
 }
 
@@ -662,12 +662,12 @@ print_cloud_firewall_notice() {
   local provider="$1"
 
   printf '\n'
-  yellow "Firewall note:"
-  printf '  The server OS firewall has been opened for UDP %s.\n' "$PORT"
+  yellow "防火墙提示："
+  printf '  服务器系统防火墙已经放行 UDP %s。\n' "$PORT"
   if [[ -n "$provider" ]]; then
-    printf '  Detected %s. You may still need to open UDP %s in the cloud security group/firewall.\n' "$provider" "$PORT"
+    printf '  检测到 %s。你可能还需要在云安全组/云防火墙里放行 UDP %s。\n' "$provider" "$PORT"
   else
-    printf '  If clients time out, also open UDP %s in your cloud provider security group/firewall.\n' "$PORT"
+    printf '  如果客户端连接超时，请同时在云厂商安全组/防火墙里放行 UDP %s。\n' "$PORT"
   fi
 }
 
@@ -676,29 +676,29 @@ print_summary() {
   local uri="$2"
   local provider="$3"
 
-  green "Hysteria 2 is installed and running."
+  green "Hysteria 2 已安装并正在运行。"
   printf '\n'
-  printf 'Server: %s:%s/udp\n' "$host" "$PORT"
-  printf 'Config: %s\n' "$CONFIG_FILE"
-  printf 'Service: hysteria-server.service\n'
+  printf '服务器：%s:%s/udp\n' "$host" "$PORT"
+  printf '配置文件：%s\n' "$CONFIG_FILE"
+  printf '服务：hysteria-server.service\n'
   printf '\n'
-  printf 'Import link:\n'
+  printf '导入链接：\n'
   printf '%s\n' "$uri"
   if [[ "$ENABLE_PANEL" == "1" ]]; then
     printf '\n'
-    printf 'Web panel:\n'
+    printf 'Web 管理面板：\n'
     if [[ "$PANEL_BIND" == "127.0.0.1" || "$PANEL_BIND" == "localhost" ]]; then
       printf '  URL: http://127.0.0.1:%s\n' "$PANEL_PORT"
-      printf '  SSH tunnel: ssh -L %s:127.0.0.1:%s root@%s\n' "$PANEL_PORT" "$PANEL_PORT" "$host"
+      printf '  SSH 隧道：ssh -L %s:127.0.0.1:%s root@%s\n' "$PANEL_PORT" "$PANEL_PORT" "$host"
     else
       printf '  URL: http://%s:%s\n' "$host" "$PANEL_PORT"
-      printf '  Security group/firewall: open TCP %s if accessing from the internet.\n' "$PANEL_PORT"
+      printf '  安全组/防火墙：如果需要公网访问，请放行 TCP %s。\n' "$PANEL_PORT"
     fi
-    printf '  Username: %s\n' "$PANEL_ADMIN_USER"
-    printf '  Password: %s\n' "$PANEL_ADMIN_PASS"
+    printf '  用户名：%s\n' "$PANEL_ADMIN_USER"
+    printf '  密码：%s\n' "$PANEL_ADMIN_PASS"
   fi
   printf '\n'
-  printf 'Useful commands:\n'
+  printf '常用命令：\n'
   printf '  systemctl status hysteria-server.service\n'
   printf '  journalctl --no-pager -u hysteria-server.service -n 80\n'
   if [[ "$ENABLE_PANEL" == "1" ]]; then
