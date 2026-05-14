@@ -33,6 +33,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/1660667086/hysteria2-onekey/
 - Web 面板端口、公网访问、管理账号和管理密码
 - 初始 Hysteria 用户名和密码
 
+密码类输入会隐藏回显：输入或粘贴时屏幕不会显示字符，输完直接按回车即可。直接按回车表示自动随机生成或沿用已有密码。
+
 单用户安装：
 
 ```bash
@@ -195,6 +197,7 @@ systemctl restart hysteria-server.service
 systemctl status hysteria-panel.service
 systemctl status hysteria-expire-users.timer
 systemctl list-timers hysteria-expire-users.timer
+grep -E '^PANEL_ADMIN_(USER|PASS)=' /etc/hysteria/panel.env
 ```
 
 ## 卸载 Hysteria

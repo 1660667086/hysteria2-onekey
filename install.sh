@@ -81,7 +81,7 @@ prompt_secret_optional() {
   local label="$2"
   local answer=""
 
-  printf '%s [自动]: ' "$label" >/dev/tty
+  printf '%s [自动，输入时不会显示]: ' "$label" >/dev/tty
   read -r -s answer </dev/tty || answer=""
   printf '\n' >/dev/tty
 
