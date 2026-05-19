@@ -202,8 +202,34 @@ grep -E '^PANEL_ADMIN_(USER|PASS)=' /etc/hysteria/panel.env
 
 ## 卸载 Hysteria
 
-官方卸载脚本：
+本仓库配套卸载脚本：
 
 ```bash
-bash <(curl -fsSL https://get.hy2.sh/) --remove
+bash <(curl -fsSL https://raw.githubusercontent.com/1660667086/hysteria2-onekey/main/uninstall.sh)
 ```
+
+默认会停止并卸载 Hysteria、Web 面板和到期检查定时器，删除面板程序目录，并尝试清理服务器系统防火墙规则；但会保留 `/etc/hysteria` 里的配置、证书和用户数据。
+
+彻底删除配置和用户数据：
+
+```bash
+PURGE_CONFIG=1 \
+bash <(curl -fsSL https://raw.githubusercontent.com/1660667086/hysteria2-onekey/main/uninstall.sh)
+```
+
+全自动无提示卸载：
+
+```bash
+YES=1 \
+bash <(curl -fsSL https://raw.githubusercontent.com/1660667086/hysteria2-onekey/main/uninstall.sh)
+```
+
+全自动彻底卸载：
+
+```bash
+YES=1 \
+PURGE_CONFIG=1 \
+bash <(curl -fsSL https://raw.githubusercontent.com/1660667086/hysteria2-onekey/main/uninstall.sh)
+```
+
+云厂商安全组规则无法由脚本删除，需要在云控制台手动检查。
