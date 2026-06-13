@@ -5,12 +5,20 @@ import hmac
 import html
 import json
 import os
+import re
 import secrets
 import shlex
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
+try:
+    from http.server import ThreadingHTTPServer
+except ImportError:
+    from socketserver import ThreadingMixIn
+
+    class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+        daemon_threads = True
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 
@@ -26,6 +34,7 @@ PANEL_ADMIN_USER = os.environ.get("PANEL_ADMIN_USER", "admin")
 PANEL_ADMIN_PASS = os.environ.get("PANEL_ADMIN_PASS", "")
 RESTART_CMD = os.environ.get("HYSTERIA_RESTART_CMD", "systemctl restart hysteria-server.service")
 CSRF_TOKEN = secrets.token_urlsafe(32)
+TZ_OFFSET_RE = re.compile(r"([+-])(\d{2}):?(\d{2})$")
 
 
 def atomic_write(path, data, mode=0o600):
@@ -211,6 +220,40 @@ def iso_utc(dt):
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def parse_datetime_compat(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+
+    tz = None
+    match = TZ_OFFSET_RE.search(raw)
+    if match:
+        sign, hours, minutes = match.groups()
+        offset = timedelta(hours=int(hours), minutes=int(minutes))
+        if sign == "-":
+            offset = -offset
+        tz = timezone(offset)
+        raw = raw[: match.start()]
+
+    formats = (
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+    )
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+        if tz is not None:
+            dt = dt.replace(tzinfo=tz)
+        elif dt.tzinfo is None:
+            dt = dt.astimezone()
+        return dt.astimezone(timezone.utc)
+    return None
+
+
 def parse_datetime(value):
     value = str(value or "").strip()
     if not value:
@@ -220,8 +263,10 @@ def parse_datetime(value):
         normalized = normalized[:-1] + "+00:00"
     try:
         dt = datetime.fromisoformat(normalized)
+    except AttributeError:
+        return parse_datetime_compat(normalized)
     except ValueError:
-        return None
+        return parse_datetime_compat(normalized)
     if dt.tzinfo is None:
         dt = dt.astimezone()
     return dt.astimezone(timezone.utc)
