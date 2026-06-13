@@ -121,6 +121,7 @@ Web 面板变量：
 | `PANEL_ADMIN_USER` | `admin` | 面板登录用户名 |
 | `PANEL_ADMIN_PASS` | 自动随机 | 面板登录密码 |
 | `PANEL_OPEN_FIREWALL` | `1` | 默认放行面板 TCP 端口；设为 `0` 可跳过 |
+| `PANEL_USE_LOCAL` | `0` | 默认从 GitHub 拉取最新 `panel.py`；设为 `1` 才使用本地仓库里的 `panel.py` |
 | `INITIAL_USER` | `user1` | 初始 Hysteria 用户名 |
 | `INITIAL_USER_PASS` | 自动随机 | 初始 Hysteria 用户密码 |
 

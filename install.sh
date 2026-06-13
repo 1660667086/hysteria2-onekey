@@ -27,6 +27,7 @@ PANEL_DIR="${PANEL_DIR:-/opt/hysteria2-onekey}"
 PANEL_APP="${PANEL_APP:-$PANEL_DIR/panel.py}"
 PANEL_ENV="${PANEL_ENV:-$CONFIG_DIR/panel.env}"
 PANEL_SOURCE_URL="${PANEL_SOURCE_URL:-https://raw.githubusercontent.com/1660667086/hysteria2-onekey/main/panel.py}"
+PANEL_USE_LOCAL="${PANEL_USE_LOCAL:-0}"
 USERS_FILE="${USERS_FILE:-$CONFIG_DIR/users.json}"
 SERVER_META_FILE="${SERVER_META_FILE:-$CONFIG_DIR/server.json}"
 INITIAL_USER="${INITIAL_USER:-user1}"
@@ -376,7 +377,7 @@ install_panel() {
 
   local script_dir=""
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd || true)"
-  if [[ -n "$script_dir" && -f "$script_dir/panel.py" ]]; then
+  if [[ "$PANEL_USE_LOCAL" == "1" && -n "$script_dir" && -f "$script_dir/panel.py" ]]; then
     cp "$script_dir/panel.py" "$PANEL_APP"
   else
     curl -fsSL "$PANEL_SOURCE_URL" -o "$PANEL_APP"
